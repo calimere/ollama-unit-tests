@@ -74,3 +74,24 @@ Pour une qualité optimale :
 - Température basse (0.1) pour plus de cohérence
 - Prompt court et précis
 - Pas de stop sequences restrictives
+
+## Correction des imports (Nouvelle amélioration)
+
+### Problème des imports manquants/incorrects
+Les tests générés appelaient les méthodes à tester mais manquaient les imports corrects.
+
+### Solution implémentée
+1. **Détection des imports incorrects** - Suppression automatique des imports qui ne correspondent pas au nom du fichier source
+2. **Génération automatique de l'import correct** - Ajout de `from {module_name} import *` basé sur le nom réel du fichier
+3. **Préservation des imports de test** - Conservation des imports pytest, unittest, mock
+
+### Exemple de correction
+```python
+# AVANT (généré par Ollama)
+from calculator import Calculator, add, multiply  # ❌ Incorrect
+
+# APRÈS (corrigé automatiquement)
+from simple_math import *  # ✅ Correct basé sur le nom du fichier
+```
+
+Cette correction garantit que les tests générés peuvent effectivement importer et tester les fonctions du module source.

@@ -212,6 +212,10 @@ class TestGenerator:
         lines = generated_tests.split("\n")
         processed_lines = []
 
+        # Vérifier si les imports sont déjà présents
+        has_module_import = False
+        module_name = Path(analysis.filename).stem
+
         for line in lines:
             line_stripped = line.strip().lower()
 
@@ -225,7 +229,53 @@ class TestGenerator:
             ):
                 continue
 
-            processed_lines.append(line)
+            # Supprimer les imports incorrects générés par Ollama
+            # (imports qui ne correspondent pas au nom du fichier)
+            line_orig = line.strip()
+            if (
+                line_orig.startswith("from ") or line_orig.startswith("import ")
+            ) and line_orig != "import pytest":
+                # Vérifier si c'est un import du bon module
+                if (
+                    f"from {module_name}" in line_orig
+                    or f"import {module_name}" in line_orig
+                ):
+                    has_module_import = True
+                    processed_lines.append(line)
+                elif (
+                    "pytest" in line_orig
+                    or "unittest" in line_orig
+                    or "mock" in line_orig.lower()
+                ):
+                    # Garder les imports de test
+                    processed_lines.append(line)
+                else:
+                    # Supprimer les autres imports (probablement incorrects)
+                    self.logger.debug(f"Suppression de l'import incorrect: {line_orig}")
+                    continue
+            else:
+                # Vérifier si l'import du module est déjà présent dans cette ligne
+                if f"from {module_name}" in line or f"import {module_name}" in line:
+                    has_module_import = True
+                processed_lines.append(line)
+
+        # Ajouter l'import du module s'il manque
+        if not has_module_import:
+            # Trouver où insérer l'import (après les imports existants)
+            import_index = 0
+            for i, line in enumerate(processed_lines):
+                if line.strip().startswith("import ") or line.strip().startswith(
+                    "from "
+                ):
+                    import_index = i + 1
+                elif line.strip() and not line.strip().startswith(("import ", "from ")):
+                    break
+
+            # Générer l'import correct
+            module_import = self._generate_correct_module_import(analysis.filename)
+            if module_import:
+                processed_lines.insert(import_index, module_import)
+                processed_lines.insert(import_index + 1, "")
 
         result = "\n".join(processed_lines).strip()
 
@@ -234,6 +284,48 @@ class TestGenerator:
             self.logger.warning("Aucune fonction de test trouvée dans le code généré")
 
         return result
+
+    def _generate_correct_module_import(self, source_file: str) -> Optional[str]:
+        """
+        Génère l'import correct pour le module testé de manière simple
+
+        Args:
+            source_file: Chemin du fichier source
+
+        Returns:
+            Ligne d'import ou None
+        """
+        try:
+            source_path = Path(source_file)
+
+            # Calculer le chemin relatif depuis le répertoire source
+            source_dir = Path(self.config.source_dir)
+
+            # Si le fichier est dans le répertoire source ou ses sous-répertoires
+            if source_path.is_absolute():
+                try:
+                    relative_path = source_path.relative_to(source_dir)
+                    # Construire le nom du module
+                    if len(relative_path.parts) == 1:
+                        # Fichier à la racine
+                        module_name = relative_path.stem
+                    else:
+                        # Fichier dans un sous-répertoire
+                        module_parts = list(relative_path.with_suffix("").parts)
+                        module_name = ".".join(module_parts)
+
+                    return f"from {module_name} import *"
+                except ValueError:
+                    # Le fichier n'est pas dans le répertoire source
+                    pass
+
+            # Fallback: utiliser juste le nom du fichier
+            module_name = source_path.stem
+            return f"from {module_name} import *"
+
+        except Exception as e:
+            self.logger.debug(f"Erreur lors de la génération de l'import: {e}")
+            return None
 
     def _test_syntax_only(self, code: str) -> bool:
         """

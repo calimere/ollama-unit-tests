@@ -6,6 +6,7 @@ Module principal pour générer des tests unitaires avec Ollama
 import argparse
 import logging
 import os
+import platform
 import sys
 from pathlib import Path
 
@@ -79,7 +80,17 @@ def main():
         action="store_true",
         help="Désactiver le traitement minimal (peut introduire des erreurs de syntaxe)",
     )
-
+    parser.add_argument(
+        "--create-venv",
+        action="store_true",
+        help="Créer un environnement virtuel et les scripts d'installation",
+    )
+    parser.add_argument(
+        "--os-type",
+        choices=["windows", "linux", "auto"],
+        default="auto",
+        help="Type d'OS pour les scripts (auto=détection automatique)",
+    )
     args = parser.parse_args()
 
     # Configuration du logging
@@ -96,8 +107,14 @@ def main():
         if not source_path.is_dir():
             logger.error(f"{source_path} n'est pas un répertoire")
             return 1
-
-        # Configuration
+        # Détection de l'OS
+        if args.os_type == "auto":
+            detected_os = (
+                "windows" if platform.system().lower() == "windows" else "linux"
+            )
+        else:
+            detected_os = args.os_type
+            # Configuration
         config = Config(
             source_dir=str(source_path),
             output_dir=args.output_dir,
@@ -168,7 +185,11 @@ def main():
         if not args.dry_run:
             logger.info(f"Total de {total_tests_generated} test(s) généré(s)")
             logger.info(f"Tests sauvegardés dans {config.output_dir}")
-
+            # Génération des scripts d'environnement si demandé
+            if args.create_venv:
+                logger.info("Génération des scripts d'environnement...")
+                _create_environment_scripts(config.output_dir, detected_os)
+                logger.info(f"Scripts d'environnement créés pour {detected_os}")
         return 0
 
     except KeyboardInterrupt:
@@ -179,6 +200,174 @@ def main():
         if args.verbose:
             logger.exception("Détails de l'erreur:")
         return 1
+
+
+def _create_environment_scripts(output_dir: str, os_type: str):
+    """Crée les scripts d'environnement pour l'OS spécifié"""
+    output_path = Path(output_dir)
+
+    # Créer requirements.txt
+    requirements_content = """# Requirements pour l'exécution des tests générés
+pytest>=7.4.0
+pytest-mock>=3.11.0
+pytest-cov>=4.1.0
+faker>=19.0.0  # Pour la génération de données de test
+"""
+
+    requirements_path = output_path / "requirements.txt"
+    with open(requirements_path, "w", encoding="utf-8") as f:
+        f.write(requirements_content)
+
+    if os_type == "windows":
+        _create_windows_scripts(output_path)
+    else:
+        _create_linux_scripts(output_path)
+
+
+def _create_windows_scripts(output_path: Path):
+    """Crée les scripts PowerShell pour Windows"""
+
+    # Script de création d'environnement
+    setup_script = """#!/usr/bin/env powershell
+# Script de configuration de l'environnement de test pour Windows
+
+Write-Host "Configuration de l'environnement de test..." -ForegroundColor Green
+
+# Verifier si Python est installe
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+    Write-Error "Python n'est pas installe ou n'est pas dans le PATH"
+    exit 1
+}
+
+# Creer l'environnement virtuel
+Write-Host "Creation de l'environnement virtuel..." -ForegroundColor Yellow
+python -m venv venv
+
+if (-not $?) {
+    Write-Error "Echec de la creation de l'environnement virtuel"
+    exit 1
+}
+
+# Activer l'environnement virtuel
+Write-Host "Activation de l'environnement virtuel..." -ForegroundColor Yellow
+& .\\venv\\Scripts\\Activate.ps1
+
+# Mettre a jour pip
+Write-Host "Mise a jour de pip..." -ForegroundColor Yellow
+python -m pip install --upgrade pip
+
+# Installer les dependances
+Write-Host "Installation des dependances..." -ForegroundColor Yellow
+pip install -r requirements.txt
+
+Write-Host "Configuration terminee!" -ForegroundColor Green
+Write-Host "Pour activer l'environnement: .\\\\venv\\\\Scripts\\\\Activate.ps1" -ForegroundColor Cyan
+Write-Host "Pour executer les tests: pytest" -ForegroundColor Cyan
+"""
+
+    # Script de lancement des tests
+    run_tests_script = """#!/usr/bin/env powershell
+# Script pour exécuter les tests
+
+Write-Host "Exécution des tests..." -ForegroundColor Green
+
+# Vérifier si l'environnement virtuel existe
+if (-not (Test-Path "venv\\\\Scripts\\\\Activate.ps1")) {
+    Write-Error "Environnement virtuel non trouvé. Exécutez d'abord setup-env.ps1"
+    exit 1
+}
+
+# Activer l'environnement virtuel
+& .\\venv\\Scripts\\Activate.ps1
+
+# Exécuter les tests avec coverage
+pytest --cov=. --cov-report=html --cov-report=term-missing -v
+
+Write-Host "Tests terminés. Rapport de couverture disponible dans htmlcov/index.html" -ForegroundColor Cyan
+"""
+
+    with open(output_path / "setup-env.ps1", "w", encoding="utf-8") as f:
+        f.write(setup_script)
+
+    with open(output_path / "run-tests.ps1", "w", encoding="utf-8") as f:
+        f.write(run_tests_script)
+
+
+def _create_linux_scripts(output_path: Path):
+    """Crée les scripts Bash pour Linux"""
+    import stat
+
+    # Script de création d'environnement
+    setup_script = """#!/bin/bash
+# Script de configuration de l'environnement de test pour Linux/macOS
+
+echo "Configuration de l'environnement de test..."
+
+# Vérifier si Python est installé
+if ! command -v python3 &> /dev/null; then
+    echo "Erreur: Python3 n'est pas installé ou n'est pas dans le PATH"
+    exit 1
+fi
+
+# Créer l'environnement virtuel
+echo "Création de l'environnement virtuel..."
+python3 -m venv venv
+
+if [ $? -ne 0 ]; then
+    echo "Erreur: Échec de la création de l'environnement virtuel"
+    exit 1
+fi
+
+# Activer l'environnement virtuel
+echo "Activation de l'environnement virtuel..."
+source venv/bin/activate
+
+# Mettre à jour pip
+echo "Mise à jour de pip..."
+python -m pip install --upgrade pip
+
+# Installer les dépendances
+echo "Installation des dépendances..."
+pip install -r requirements.txt
+
+echo "Configuration terminée!"
+echo "Pour activer l'environnement: source venv/bin/activate"
+echo "Pour exécuter les tests: pytest"
+"""
+
+    # Script de lancement des tests
+    run_tests_script = """#!/bin/bash
+# Script pour exécuter les tests
+
+echo "Exécution des tests..."
+
+# Vérifier si l'environnement virtuel existe
+if [ ! -f "venv/bin/activate" ]; then
+    echo "Erreur: Environnement virtuel non trouvé. Exécutez d'abord ./setup-env.sh"
+    exit 1
+fi
+
+# Activer l'environnement virtuel
+source venv/bin/activate
+
+# Exécuter les tests avec coverage
+pytest --cov=. --cov-report=html --cov-report=term-missing -v
+
+echo "Tests terminés. Rapport de couverture disponible dans htmlcov/index.html"
+"""
+
+    setup_path = output_path / "setup-env.sh"
+    run_path = output_path / "run-tests.sh"
+
+    with open(setup_path, "w", encoding="utf-8") as f:
+        f.write(setup_script)
+
+    with open(run_path, "w", encoding="utf-8") as f:
+        f.write(run_tests_script)
+
+    # Rendre les scripts exécutables
+    setup_path.chmod(setup_path.stat().st_mode | stat.S_IEXEC)
+    run_path.chmod(run_path.stat().st_mode | stat.S_IEXEC)
 
 
 if __name__ == "__main__":
