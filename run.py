@@ -129,6 +129,8 @@ def main():
         logger.info(f"Démarrage de la génération de tests pour {source_path}")
         logger.info(f"Modèle Ollama: {config.model}")
         logger.info(f"Hôte Ollama: {config.host}")
+        logger.info(f"Répertoire de sortie: {config.output_dir}")
+        logger.debug(f"Le répertoire de sortie sera automatiquement exclu de l'analyse")
 
         # Initialisation des composants
         scanner = PythonFileScanner(config)
@@ -212,7 +214,28 @@ pytest>=7.4.0
 pytest-mock>=3.11.0
 pytest-cov>=4.1.0
 faker>=19.0.0  # Pour la génération de données de test
+
+# Dépendances du projet principal
 """
+
+    # Lire et ajouter les dépendances du requirements.txt principal
+    main_requirements_path = Path(__file__).parent / "requirements.txt"
+    if main_requirements_path.exists():
+        try:
+            with open(main_requirements_path, "r", encoding="utf-8") as f:
+                main_requirements = f.read()
+            
+            # Filtrer les commentaires et lignes vides du fichier principal
+            main_lines = []
+            for line in main_requirements.split('\n'):
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    main_lines.append(line)
+            
+            if main_lines:
+                requirements_content += '\n'.join(main_lines) + '\n'
+        except Exception as e:
+            print(f"Attention: Impossible de lire {main_requirements_path}: {e}")
 
     requirements_path = output_path / "requirements.txt"
     with open(requirements_path, "w", encoding="utf-8") as f:
@@ -222,7 +245,6 @@ faker>=19.0.0  # Pour la génération de données de test
         _create_windows_scripts(output_path)
     else:
         _create_linux_scripts(output_path)
-
 
 def _create_windows_scripts(output_path: Path):
     """Crée les scripts PowerShell pour Windows"""
@@ -241,7 +263,7 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 
 # Creer l'environnement virtuel
 Write-Host "Creation de l'environnement virtuel..." -ForegroundColor Yellow
-python -m venv venv
+python -m venv venv-tests
 
 if (-not $?) {
     Write-Error "Echec de la creation de l'environnement virtuel"
@@ -250,7 +272,7 @@ if (-not $?) {
 
 # Activer l'environnement virtuel
 Write-Host "Activation de l'environnement virtuel..." -ForegroundColor Yellow
-& .\\venv\\Scripts\\Activate.ps1
+& .\\venv-tests\\Scripts\\Activate.ps1
 
 # Mettre a jour pip
 Write-Host "Mise a jour de pip..." -ForegroundColor Yellow
@@ -259,32 +281,37 @@ python -m pip install --upgrade pip
 # Installer les dependances
 Write-Host "Installation des dependances..." -ForegroundColor Yellow
 pip install -r requirements.txt
+pip install -r tests/requirements.txt
 
 Write-Host "Configuration terminee!" -ForegroundColor Green
-Write-Host "Pour activer l'environnement: .\\\\venv\\\\Scripts\\\\Activate.ps1" -ForegroundColor Cyan
-Write-Host "Pour executer les tests: pytest" -ForegroundColor Cyan
+Write-Host "-----------------------" -ForegroundColor Red
+Write-Host "Attention, assurez-vous d'exécuter les scripts avec les permissions appropriées" -ForegroundColor Red
+Write-Host "Attention, assurez-vous d'exécuter les scripts à la racine du projet" -ForegroundColor Red
+Write-Host "Pour executer les tests: .//tests//run-tests.ps1" -ForegroundColor Cyan
+Write-Host "-----------------------" -ForegroundColor Red
+
 """
 
     # Script de lancement des tests
     run_tests_script = """#!/usr/bin/env powershell
-# Script pour exécuter les tests
+    # Script pour exécuter les tests
 
-Write-Host "Exécution des tests..." -ForegroundColor Green
+    Write-Host "Exécution des tests..." -ForegroundColor Green
 
-# Vérifier si l'environnement virtuel existe
-if (-not (Test-Path "venv\\\\Scripts\\\\Activate.ps1")) {
-    Write-Error "Environnement virtuel non trouvé. Exécutez d'abord setup-env.ps1"
-    exit 1
-}
+    # Vérifier si l'environnement virtuel existe
+    if (-not (Test-Path "venv-tests\\\\Scripts\\\\Activate.ps1")) {
+        Write-Error "Environnement virtuel non trouvé. Exécutez d'abord setup-env.ps1"
+        exit 1
+    }
 
-# Activer l'environnement virtuel
-& .\\venv\\Scripts\\Activate.ps1
+    # Activer l'environnement virtuel
+    & .\\venv-tests\\Scripts\\Activate.ps1
 
-# Exécuter les tests avec coverage
-pytest --cov=. --cov-report=html --cov-report=term-missing -v
+    # Exécuter les tests avec coverage
+    pytest --cov=. --cov-report=html --cov-report=term-missing -v
 
-Write-Host "Tests terminés. Rapport de couverture disponible dans htmlcov/index.html" -ForegroundColor Cyan
-"""
+    Write-Host "Tests terminés. Rapport de couverture disponible dans htmlcov/index.html" -ForegroundColor Cyan
+    """
 
     with open(output_path / "setup-env.ps1", "w", encoding="utf-8") as f:
         f.write(setup_script)
@@ -329,6 +356,7 @@ python -m pip install --upgrade pip
 # Installer les dépendances
 echo "Installation des dépendances..."
 pip install -r requirements.txt
+pip install -r tests/requirements.txt
 
 echo "Configuration terminée!"
 echo "Pour activer l'environnement: source venv/bin/activate"

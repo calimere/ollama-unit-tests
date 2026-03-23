@@ -107,6 +107,14 @@ class TestGenerator:
         lines = generated_tests.split("\n")
         processed_lines = []
 
+        # Ajout du header et imports basiques
+        processed_lines.extend(
+            [
+                "# Tests générés automatiquement",
+                "",
+            ]
+        )
+
         # Ajout des imports nécessaires si manquants
         has_pytest_import = any("import pytest" in line for line in lines[:10])
         has_unittest_import = any("import unittest" in line for line in lines[:10])
@@ -129,6 +137,9 @@ class TestGenerator:
         imports_added = False
 
         if not has_pytest_import and not has_unittest_import:
+            # Générer les lignes sys.path dynamiquement
+            path_setup_lines = self._generate_path_setup(analysis.filename)
+            processed_lines.extend(path_setup_lines)
             processed_lines.extend(
                 [
                     "import pytest",
@@ -212,9 +223,23 @@ class TestGenerator:
         lines = generated_tests.split("\n")
         processed_lines = []
 
-        # Vérifier si les imports sont déjà présents
+        # Header simple pour les tests
+        processed_lines.extend(
+            [
+                "# Tests générés automatiquement",
+                "",
+            ]
+        )
+        
+        # Ajouter les lignes sys.path pour les imports
+        path_setup_lines = self._generate_path_setup(analysis.filename)
+        processed_lines.extend(path_setup_lines)
+
+        # Vérifier si les imports sont déjà présents et collecter les imports du module
         has_module_import = False
         module_name = Path(analysis.filename).stem
+        module_import_lines = []
+        other_lines = []
 
         for line in lines:
             line_stripped = line.strip().lower()
@@ -229,8 +254,7 @@ class TestGenerator:
             ):
                 continue
 
-            # Supprimer les imports incorrects générés par Ollama
-            # (imports qui ne correspondent pas au nom du fichier)
+            # Séparer les imports du module testé des autres lignes
             line_orig = line.strip()
             if (
                 line_orig.startswith("from ") or line_orig.startswith("import ")
@@ -241,13 +265,13 @@ class TestGenerator:
                     or f"import {module_name}" in line_orig
                 ):
                     has_module_import = True
-                    processed_lines.append(line)
+                    module_import_lines.append(line)
                 elif (
                     "pytest" in line_orig
                     or "unittest" in line_orig
                     or "mock" in line_orig.lower()
                 ):
-                    # Garder les imports de test
+                    # Garder les imports de test - les ajouter après sys.path mais avant module
                     processed_lines.append(line)
                 else:
                     # Supprimer les autres imports (probablement incorrects)
@@ -257,25 +281,24 @@ class TestGenerator:
                 # Vérifier si l'import du module est déjà présent dans cette ligne
                 if f"from {module_name}" in line or f"import {module_name}" in line:
                     has_module_import = True
-                processed_lines.append(line)
+                    module_import_lines.append(line)
+                else:
+                    other_lines.append(line)
 
         # Ajouter l'import du module s'il manque
         if not has_module_import:
-            # Trouver où insérer l'import (après les imports existants)
-            import_index = 0
-            for i, line in enumerate(processed_lines):
-                if line.strip().startswith("import ") or line.strip().startswith(
-                    "from "
-                ):
-                    import_index = i + 1
-                elif line.strip() and not line.strip().startswith(("import ", "from ")):
-                    break
-
             # Générer l'import correct
             module_import = self._generate_correct_module_import(analysis.filename)
             if module_import:
-                processed_lines.insert(import_index, module_import)
-                processed_lines.insert(import_index + 1, "")
+                module_import_lines.append(module_import)
+
+        # Maintenant assembler dans le bon ordre: sys.path -> autres imports -> imports module -> reste du code
+        if module_import_lines:
+            processed_lines.extend(module_import_lines)
+            processed_lines.append("")
+        
+        # Ajouter le reste du code
+        processed_lines.extend(other_lines)
 
         result = "\n".join(processed_lines).strip()
 
@@ -698,3 +721,65 @@ class TestGenerator:
             )
 
         return "\n".join(summary)
+    
+    def _generate_path_setup(self, source_file: str) -> list[str]:
+        """Génère les lignes sys.path de manière générique
+        
+        Args:
+            source_file: Chemin vers le fichier source à tester
+            
+        Returns:
+            Liste des lignes de code pour configurer sys.path
+        """
+        try:
+            source_path = Path(source_file).resolve()
+            source_dir = Path(self.config.source_dir).resolve() 
+            tests_dir = Path(self.config.output_dir).resolve()
+            
+            # Calculer la racine du projet (parent du répertoire source)
+            project_root = source_dir.parent
+            
+            # Calculer le répertoire du fichier source à tester
+            source_file_dir = source_path.parent
+            
+            # Chemins relatifs depuis le répertoire de tests
+            rel_project_root = os.path.relpath(project_root, tests_dir)
+            rel_source_dir = os.path.relpath(source_file_dir, tests_dir)
+            
+            # Convertir les chemins Windows en format Python (avec '/' au lieu de '\\')
+            rel_project_root = rel_project_root.replace('\\', '/')
+            rel_source_dir = rel_source_dir.replace('\\', '/')
+            
+            lines = [
+                "import sys",
+                "import os",
+                "",
+                "# Ajouter le répertoire racine du projet au PYTHONPATH",
+                f'project_root = os.path.join(os.path.dirname(__file__), "{rel_project_root}")',
+                "sys.path.insert(0, os.path.abspath(project_root))",
+                ""
+            ]
+            
+            # Ajouter le répertoire du fichier source seulement s'il est différent de la racine
+            if rel_source_dir != rel_project_root:
+                lines.extend([
+                    f"# Ajouter le répertoire '{source_file_dir.name}/' pour les imports directs",
+                    f'source_dir = os.path.join(os.path.dirname(__file__), "{rel_source_dir}")',
+                    "sys.path.insert(0, os.path.abspath(source_dir))",
+                    ""
+                ])
+            
+            return lines
+            
+        except Exception as e:
+            self.logger.debug(f"Erreur lors de la génération du path setup: {e}")
+            # Fallback simple
+            return [
+                "import sys", 
+                "import os",
+                "",
+                "# Configuration par défaut du PYTHONPATH",
+                'project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))',
+                "sys.path.insert(0, os.path.abspath(project_root))",
+                ""
+            ]

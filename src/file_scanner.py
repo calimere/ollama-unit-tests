@@ -49,6 +49,19 @@ class PythonFileScanner:
         Returns:
             True si le fichier doit être inclus, False sinon
         """
+        # Vérifier si le fichier est dans le répertoire de sortie des tests
+        try:
+            output_path = Path(self.config.output_dir).resolve()
+            file_absolute = file_path.resolve()
+            
+            # Si le fichier est dans le répertoire de sortie ou un de ses sous-répertoires
+            if output_path in file_absolute.parents or file_absolute == output_path:
+                self.logger.debug(f"Fichier exclu (répertoire de tests): {file_path}")
+                return False
+        except (OSError, ValueError):
+            # En cas d'erreur de résolution de chemin, on continue
+            pass
+        
         # Vérification du nom de fichier
         if file_path.name in self.config.exclude_files:
             return False
@@ -56,6 +69,10 @@ class PythonFileScanner:
         # Vérification des répertoires parents
         for part in file_path.parts:
             if part in self.config.exclude_dirs:
+                return False
+            # Exclure les répertoires contenant "test" dans leur nom
+            if "test" in part.lower():
+                self.logger.debug(f"Fichier exclu (répertoire contient 'test'): {file_path}")
                 return False
         
         # Vérification que ce n'est pas un répertoire caché
@@ -72,6 +89,11 @@ class PythonFileScanner:
                 return False
         except (OSError, IOError):
             self.logger.warning(f"Impossible de lire les informations du fichier: {file_path}")
+            return False
+
+        # Vérification que le fichier ne contient pas "test" dans son nom
+        if "test" in file_path.stem.lower():
+            self.logger.debug(f"Fichier de test exclu: {file_path}")
             return False
         
         return True
